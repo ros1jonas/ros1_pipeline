@@ -11,7 +11,16 @@ import Volcano_obj
 
 def get_geo_file(geo_code: str, dest_map: str=""):
     """
-    Downloads a soft file of an GSE number to a user specified folder.
+    Downloads a soft file of an GSE number. The soft file is either saved
+    to a user specified folder (if the parameter dest_map is filled), or
+    directly saved in the current directory
+    (if the parameter dest_map is not filled). This function will always
+    return a string containing the full file path to the created
+    soft file.
+
+    A soft file can contain data tables and accompanying descriptive
+    information of GSE records.
+    This soft file will be further used to create a GSE object.
 
     :param str geo_code: GEO database identifier of GSE file.
     :param str dest_map: Name of folder where soft file is downloaded to.
@@ -30,8 +39,16 @@ def get_geo_file(geo_code: str, dest_map: str=""):
 
 def get_gse_obj(soft_file_string: str)->GEOparse.GSE:
     """
-    Creates an GSE object with a soft file.
-    The first step
+    Creates an GSE object with a soft file. This function receives
+    a single parameter, soft_file_string, a string which
+    contains the file path to the soft file.
+    This function returns the GSE object.
+
+    The GSE object will be used to create a metadata table.
+    the metadata is necessary to create a dds (DeseqDataSet) object, which will
+    be further used to create ds (DeseqStats) objects.
+    The metadata is also necessary to create the raw counts pandas table
+    which is also required to create the dds object.
 
     :param str soft_file_string: File path to soft file to retrieve.
     :return: GSE object
@@ -44,7 +61,15 @@ def get_gse_obj(soft_file_string: str)->GEOparse.GSE:
 def get_metadata_pandas(gse, excelstring=None)->pandas.DataFrame:
     """
     Creates a pandas table containing the sequencing metadata from a GSE object.
-    Optionialy, the user may opt to save the metadata in an Excel file.
+    Optionialy, the user may opt to save the metadata in an Excel file
+    by filling out the excelstring parameter. The metadata is returned
+    as a pandas table.
+
+    The metadata contains, among others, the various test designs.
+    This metadata is necessary to create a dds (DeseqDataSet) object, which will
+    be further used to create ds (DeseqStats) objects.
+    The metadata is also necessary to create the raw counts pandas table
+    which is also required to create the dds object.
 
     :param GEOparse.GSE gse: GSE object from which metadata is retrieved.
     :param str excelstring: Name of file where metadata will be saved,
@@ -62,10 +87,15 @@ def get_metadata_pandas(gse, excelstring=None)->pandas.DataFrame:
 def get_counts_pandas_from_raw_counts(rawcounts, meta_pd, excelstring=None)->pandas.DataFrame:
     """
     Creates a pandas table containing all the gene counts
-    per sample from a raw counts file.
-    The table is arranged in such a way that it can be utilized by
-    DeseqDataSet without further modification.
-    The user may opt to save the metadata in an Excel file.
+    per sample from a raw counts file. This function also
+    requires the metadata pandas table to get a list of sample names.
+    The counts table is arranged in such a way that it can be
+    utilized by DeseqDataSet without further modification.
+    The user may opt to save the metadata in an Excel file by
+    filling out the excelstring parameter.
+
+    The counts table is necessary to create a dds (DeseqDataSet) object,
+    which will be further used to create ds (DeseqStats) objects.
 
     :param str rawcounts: File path to a .txt file containing the reads.
     :param pandas meta_pd: Table containing the sequencing metadata.
@@ -106,10 +136,19 @@ def filterrawcounts(rawcounts_pd):
 def get_deseq2dataset(meta_pd, rawcounts_pd, designstring)->DeseqDataSet:
     """
     Creates a Deseq2 dataset object containing all the test cases.
+    As parameters, this function requires a pandas table containing
+    the metadata, a pandas table containing the counts data and the
+    designstring, a string which contains the name of the column
+    containing the test design names.
+
+    The dds (DeseqDataSet) object is used to create ds (DeseqStats)
+    objects. ds objects contain, among others, tables with the P-values
+    and fold changes of the different test cases, these will be
+    used to fill multidicts which are used to create volcano plots.
 
     :param pandas meta_pd: Table containing the sequencing metadata
     :param pandas rawcounts_pd: Table containing all the gene counts per sample.
-    :param str designstring: Name of collumn containing different test cases.
+    :param str designstring: Name of column containing different test cases.
     :return: Deseq2 dataset object containing all the test cases.
     :rtype: DeseqDataSet
     """
@@ -123,7 +162,16 @@ def get_deseq2dataset(meta_pd, rawcounts_pd, designstring)->DeseqDataSet:
 
 def get_deseqstats(dds, designstring, tested_lvl: str, control_name: str)->DeseqStats:
     """
-    Creates a Deseq2 stats object containing p-value estimations for a specific test case.
+    Creates a Deseq2 stats object containing p-value estimations
+    and fold changes of a specific test case. This function
+    requires as parameters: a dds object, a string which
+    contains the name of the column containing the test design
+    names (designstring), the name of the test design (tested_lvl) and
+    the name of the control test (control_name).
+
+    Ds objects contain, among others, tables with the P-values
+    and fold changes of the different test cases, these will be
+    used to fill multidicts which are used to create volcano plots.
 
     :param pydeseq2.DeseqStats dds: Deseq2 dataset object containing all the test cases.
     :param str designstring: Name of column containing the test design names.
@@ -356,7 +404,7 @@ if __name__ == '__main__':
     soft_file_string = get_geo_file("GSE229195", "getmap")
     gse = get_gse_obj(soft_file_string)
     meta_pd = get_metadata_pandas(gse)
-    get_metadata_pandas(gse, "metadata")
+    # get_metadata_pandas(gse, "metadata")
     rawcounts_pd = (get_counts_pandas_from_raw_counts
                     ("handmatige_counts_download/GSE229195_Raw_gene_counts_matrix.txt", meta_pd, "rawcountstest"))
     # filterrawcounts(rawcounts_pd)
@@ -371,7 +419,7 @@ if __name__ == '__main__':
     multidict = get_multidict(dds, designstring, control_name,
                                      test_list, "multidict")
     dict_met_volcs = get_multi_volcano(multidict, 20, 5, True)
-    print(dict_met_volcs)
+    # print(dict_met_volcs)
     dict_met_volcs["IN10018, 24h"]["volcano"].show_plot()
 
 
