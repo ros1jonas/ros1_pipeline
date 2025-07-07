@@ -5,8 +5,70 @@ from pydeseq2.dds import DeseqDataSet
 from pydeseq2.ds import DeseqStats
 import numpy as np
 from math import log10
+import json
+import tarfile
+import os
+import gzip
 
 import Volcano_obj
+
+
+def get_count_pd_from_tar(tar_path : str, meta_pd : pandas):
+    """
+    Creates a pandas object containing the counts data from a tar file
+    and a pandas metadata object. If certain samples are omitted from
+    the metadata, then they will also be omitted in the counts pandas
+    object. If the "supplementary_file_1" column in the metadata is
+    not fully filled out, the counts pandas object will not be complete.
+
+    :param str tar_path: File path to tar file.
+    :param pandas meta_pd: pandas dataframe containing the metadata.
+    :return: dataframe containing the raw counts.
+    :rtype: pandas
+    """
+    data = {}
+    gene_index = []
+    index_done = False
+    with tarfile.open(tar_path, "r") as tf:
+        for x in tf.getmembers():
+            tf.extract(member=x.name)
+            with gzip.open(x.name, 'rt') as f:
+                file_content = f.read()
+            meta_title = ""
+            for index, row in meta_pd.iterrows():
+               if x.name in row["supplementary_file_1"]:
+                   meta_title = index
+            if meta_title != "":
+                templist = []
+                counts_loc = None
+                for y in file_content.split("\n"):
+                    if counts_loc == None:
+                        teller = 0
+                        for z in y.split("\t"):
+                            if z in ["expected_count"]:
+                                counts_loc = teller
+                            teller += 1
+                    elif y != "":
+                        templist.append(round(float(y.split("\t")[counts_loc])))
+                        if index_done == False:
+                            gene_index.append((y.split("\t")[0]))
+                index_done = True
+                data[meta_title] = templist
+            os.remove(x.name)
+    counts_df = pandas.DataFrame(data, index=gene_index)
+    return counts_df.T
+
+
+def get_meta_pd_from_xlsx(metastring : str):
+    """
+    Create a metadata pandas dataframe from a metadata Excel file.
+
+    :param str metastring: File path to metadata xlsx file.
+    :return: dataframe containing the raw counts.
+    :rtype: pandas
+    """
+    meta_pd = pandas.read_excel(metastring)
+    return meta_pd.set_index("title")
 
 
 def get_geo_file(geo_code: str, dest_map: str=""):
@@ -106,13 +168,6 @@ def get_counts_pandas_from_raw_counts(rawcounts, meta_pd, excelstring=None)->pan
     """
     rawcounts_pd = pandas.read_table(rawcounts, index_col=0)
     testlist = meta_pd.index.to_list()
-
-    # droplist = []
-    # for (columnName, columnData) in rawcounts_pd.items():
-    #     if columnName not in testlist:
-    #         droplist.append(columnName)
-    # rawcounts_dropped = rawcounts_pd.drop(droplist, axis='columns')
-
     rawcounts_dropped = rawcounts_pd[testlist].copy()
     rawcounts_dropped.reindex_like(rawcounts_dropped)
     rawcounts_pd_transposed = rawcounts_dropped.T
@@ -209,6 +264,18 @@ def get_multidict(dds, designstring, control_name: str, tested_list: list, excel
     """
     Creates a dictionary containing the P values,
     fold change and base means per test case.
+    A dds (deseqdataset) object is required as the first parameter,
+    This dds is used to generate ds (deseqstats) objects for each
+    test case, from which the data is retrieved.
+
+
+
+    The user may opt to save the multidict in an Excel file by
+    filling out the excelstring parameter. The Excel file will contain
+    a sheet for each test design, with each sheet containing a column
+    for the P values, fold changes and base means.
+
+
 
     :param pydeseq2.DeseqStats dds: Deseq2 dataset object containing all the test cases.
     :param str designstring: Name of column containing the test design names.
@@ -400,6 +467,157 @@ def get_designstring_controlname_testlist(meta_pd)->tuple[str, str, list]:
         return designstring, control_name, test_list
 
 
+def get_design_dict(meta_pd : pandas):
+    """
+    Creates from a metadata pandas dataframe a dictionary containing
+    all characteristics columns containing more than one design.
+    The values for each column contain further dictionaries containing
+    the different designs as keys and the number of times these designs
+    appear as values.
+
+    These dicts can be used to create an overview of different possible
+    designs of multiple GSE series.
+
+    :param meta_pd: Pandas dataframe containing the metadata.
+    :return: dictionary containing
+        all characteristics columns containing more than one design.
+    :rtype: dict
+    """
+    design_dict = {}
+    for (columnName, columnData) in meta_pd.items():
+        if columnName.split("_")[0] == "characteristics":
+            counter = 0
+            testdict = {}
+            for index, value in columnData.items():
+                if value not in testdict.keys():
+                    testdict[value] = 1
+                else:
+                    testdict[value] += 1
+                counter+=1
+            if len(testdict) > 1:
+                design_dict[columnName.split("_")[1]] = testdict
+    return design_dict
+
+
+def get_combined_design_meta(meta_pd : pandas, designlist : list, combined_col_name : str = None,  excelstring=None):
+    """
+    This function receives a metadata pandas dataframe and a list
+    containing two metadata columns to be combined into a new
+    third column, which is added to the metadata dataframe and
+    returned. by filling out the parameter "combined_col_name" a new
+    custom name can be given to this combined collumn, else the function
+    will make one by combining the names of the provided collumns.
+    The new metadata is also saved as a xlsx file if "excelstring"
+    is filled out.
+
+
+    :param meta_pd: metadata pandas dataframe
+    :param designlist: list containing two metadata columns to be
+        combined into a new third column
+    :param combined_col_name: Name of new column, optional.
+    :param excelstring: Name of file where new metadata will be saved,
+        nothing is saved if empty.
+    :return: New metadata pandas dataframe with added combined column.
+    :rtype: pandas dataframe
+    :return: Name of new column
+    :rtype: str
+    """
+
+    new_collumnname = ""
+    for x in designlist:
+        new_collumnname += x
+    if combined_col_name is not None:
+        new_collumnname = combined_col_name
+    serieslist = []
+    for index, row in meta_pd.iterrows():
+        combined_content = ""
+        for x in designlist:
+            if combined_content != "":
+                combined_content += " "
+            if str(row.loc[x]) != "nan":
+                combined_content += str(row.loc[x])
+        serieslist.append(row.add(pandas.Series([combined_content, index], index=[new_collumnname, "title"]), fill_value=""))
+    combined_meta = pandas.concat(serieslist, axis = 1).T.set_index("title")
+    if excelstring != None:
+        combined_meta.to_excel(excelstring + ".xlsx")
+    return combined_meta, new_collumnname
+
+
+def create_simplified_design(
+        meta_pd : pandas,
+        targetdesign : str,
+        simplify_list : list,
+        simplified_col_name : str = "char_simple",
+        excelstring=None):
+    """
+    Adds a new collumn to a metadata pandas dataframe containing
+    the labels "target", "control" or "other", depending on certain
+    keywords provided by the parameter simplify_list and whether these
+    appear in the column "targetdesign".
+
+    simplify_list contains two elements in following order:
+    elements that signify control (list with strings)
+    elements that signify target (list with strings)
+
+    currently ALL elements have to be present
+
+
+    :param meta_pd: pandas dataframe containing metadata.
+    :param targetdesign: Column from which simplified column
+        will be created
+    :param simplify_list: list containg two list containing keywords
+        that define "control" and "target".
+    :param simplified_col_name: Name of new column, optional.
+    :param excelstring: Name of file where new metadata will be saved,
+        nothing is saved if empty.
+    :return: New metadata pandas dataframe with added simple column.
+    :rtype: pandas dataframe
+    :return: Name of new column.
+    :rtype: str
+    """
+    serieslist = []
+    for index, row in meta_pd.iterrows():
+        new_content = "other"
+        for x in simplify_list[0]:
+            if x in str(row.loc[targetdesign]):
+                new_content = "control"
+            else:
+                new_content = "other"
+                break
+        if new_content != "control":
+            for x in simplify_list[1]:
+                if x in str(row.loc[targetdesign]):
+                    new_content = "target"
+                else:
+                    new_content = "other"
+                    break
+        serieslist.append(
+            row.add(pandas.Series([new_content, index], index=[simplified_col_name, "title"]), fill_value=""))
+    combined_meta = pandas.concat(serieslist, axis=1).T.set_index("title")
+    if excelstring != None:
+        combined_meta.to_excel(excelstring + ".xlsx")
+    return combined_meta, simplified_col_name
+
+# def get_split_design_meta(
+#         meta_pd : pandas,
+#         targetdesign : str,
+#         split_intervals : list,
+#         split_on : list = [" "],
+#         split_column_names : list = []
+# ):
+#     """
+#     Will probably be unused.
+#
+#     :param meta_pd:
+#     :param targetdesign:
+#     :param split_intervals:
+#     :param split_on:
+#     :param split_column_names:
+#     :return:
+#     """
+#     pass
+
+
 if __name__ == '__main__':
     soft_file_string = get_geo_file("GSE229195", "getmap")
     gse = get_gse_obj(soft_file_string)
@@ -421,5 +639,3 @@ if __name__ == '__main__':
     dict_met_volcs = get_multi_volcano(multidict, 20, 5, True)
     # print(dict_met_volcs)
     dict_met_volcs["IN10018, 24h"]["volcano"].show_plot()
-
-
